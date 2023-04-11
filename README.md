@@ -15,7 +15,7 @@ RIPE is free software and released under the MIT licence (see file named LICENSE
 
 1. Build the RIPE backend: `make`
 
-2. Run a test with specified parameters: `<spike or other run command> _t <technique> _i <attack code> _c <code pointer> _l <location> _f <function> _d <optional debug output>`
+2. Run a test with specified parameters: `<spike or other run command> -t <technique> -i <attack code> -c <code pointer> -l <location> -f <function> -d <optional debug output>`
 
 #### For the full testbench:
 
