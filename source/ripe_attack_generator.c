@@ -13,8 +13,10 @@
  */
 
 #include "ripe_attack_generator.h"
+#include "udasics.h"
 
 static boolean output_debug_info = FALSE;
+
 
 // JM: shellcode is generated in perform_attack()
 char * shellcode_nonop[12];
@@ -89,6 +91,9 @@ main(int argc, char ** argv)
     int option_char;
     jmp_buf stack_jmp_buffer_param;
 
+    //register dasics
+    register_udasics(0);
+
     // parse command line input
     while ((option_char = getopt(argc, argv, "t:i:c:l:f:d")) != -1) {
         switch (option_char) {
@@ -127,6 +132,7 @@ main(int argc, char ** argv)
     }
 
     printf("Back in main\n");
+    unregister_udasics();
 
     return 0;
 } /* main */
