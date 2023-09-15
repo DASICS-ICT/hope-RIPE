@@ -1,0 +1,10 @@
+
+file ./build/ripe_attack_generator
+
+target remote:1234
+
+b handle_DasicsULoadFault
+
+b handle_DasicsUStoreFault
+
+c

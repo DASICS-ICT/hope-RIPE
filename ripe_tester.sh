@@ -5,15 +5,16 @@ code_ptrs=("ret"  "funcptrstackvar"  "funcptrstackparam"  "funcptrheap"         
 "structfuncptrdata"  "structfuncptrbss"  "longjmpstackvar"  "longjmpstackparam"     \
 "longjmpheap"  "longjmpdata"  "longjmpbss" "bof"  "iof"  "leak" )                   
 
-funcs=("memcpy"  "strcpy"  "strncpy"  "sprintf"  "snprintf"  "strcat"  \
-"strncat"  "sscanf"  "homebrew")
+# funcs=("memcpy"  "strcpy"  "strncpy"  "sprintf"  "snprintf"  "strcat"  \
+# "strncat"  "sscanf"  "homebrew")
+funcs=("memcpy")
 
 locations=("stack" "heap" "bss" "data")
 
 attacks=("shellcode"  "returnintolibc"  "rop"  "dataonly")
-techniques = []
-count_only = 0
-output = ''
+techniques=("direct" "indirect")
+count_only=0
+output=''
 
 # echo ${code_ptr[4]}
 
@@ -82,6 +83,7 @@ touch out/out.text
 total_ok=0
 total_fail=0
 total_np=0
+defend_ok=0
 
 start_time=$(date +%s.%N)
 
@@ -93,11 +95,16 @@ for attack in "${attacks[@]}"; do
                 for func in "${funcs[@]}"; do
                     rm -f out/out.text
 
-                    cmdargs="./ripe_attack_generator -t $tech -i $attack -c $ptr -l $loc -f $func"
+                    cmdargs="./ripe_attack_generator -t $tech -i $attack -c $ptr -l $loc -f $func -dasics"
                     cmdline="$cmdargs > out/out.text 2>&1"
 
+                
 					if [[ $count_only -eq 0 ]]; then
 						eval "$cmdline"
+                        return_code=$?
+                        if [ $return_code -eq 66 ]; then
+                            defend_ok=$((defend_ok + 1))
+                        fi
 						sleep 0.1
 					else
 						touch out/out.text
@@ -113,11 +120,13 @@ for attack in "${attacks[@]}"; do
 					if grep -q "success" out/out.text; then
 						status=1
 						total_ok=$((total_ok + 1))
+                        echo $cmdargs >> success.txt
 					fi
 
 					if [[ $status -eq 0 ]]; then
 						total_fail=$((total_fail + 1))
 					fi
+
 
 					# print attack
 					print_attack $attack $tech $loc $ptr $func $status
@@ -136,6 +145,7 @@ avg_time=$(echo "scale=2; $end_time / $total_attacks" | bc)
 # Print summary
 echo "SUMMARY"
 echo "Total OK: $total_ok"
+echo "Total protect: $defend_ok"
 echo "Total FAIL: $total_fail"
 echo "Total Not-Posiible: $total_np"
 echo "Total Attacks Executed: $total_attacks"

@@ -13,9 +13,18 @@
  */
 
 #include "ripe_attack_generator.h"
-#include "udasics.h"
+#include <udasics.h>
+#include <uattr.h>
+#include <redirect.h>
 
-static boolean output_debug_info = FALSE;
+
+extern void register_udasics(uint64_t funcptr);
+extern void unregister_udasics(void);
+
+extern int32_t  dasics_libcfg_alloc(uint64_t cfg, uint64_t hi, uint64_t lo);
+extern int32_t  dasics_libcfg_free(int32_t idx);
+
+static boolean output_debug_info = TRUE;
 
 
 // JM: shellcode is generated in perform_attack()
@@ -43,8 +52,8 @@ static char data_buffer1[256] = "d";
 static char data_buffer2[8] = "dummy";
 static char data_secret[32] = "success. Secret data leaked.\n";
 static int data_flag = 0700;
-static uint32_t * data_mem_ptr_aux[64] = { &dummy_function };
-static uint32_t * data_mem_ptr[64] = { &dummy_function };
+static uint64_t * data_mem_ptr_aux[64] = { &dummy_function };
+static uint64_t * data_mem_ptr[64] = { &dummy_function };
 static int (* data_func_ptr)(const char *) = &dummy_function;
 static jmp_buf data_jmp_buffer = { 1 };
 
@@ -56,15 +65,15 @@ ret2libc_target();
 void
 rop_target();
 void
-dop_target(char * buf, uint32_t auth);
+dop_target(char * buf, uint64_t auth);
 
 // JM: contains buffer lower in memory than stack param, allowing for overflow
 void
-set_low_buf(char ** buf);
+set_low_buf(char ** buf, int * buf_dhandle);  // buf_dhandle is for DASICS
 
 // JM: integer overflow vulnerability
 void
-iof(char * buf, uint32_t iv);
+iof(char * buf, uint64_t iv);
 
 // JM: arbitrary read bug
 void
@@ -78,6 +87,25 @@ homebrew_memcpy_param(void * dst, const void * src, register size_t length);
 void
 lj_func(jmp_buf lj_buf);
 
+
+// DASICS Handles of LibBounds
+// Note: Not all of them will be used at the same time
+int __stack_struct_buffer_dhandle = -1;
+int __stack_low_buf_dhandle = -1;
+int __stack_buffer_dhandle = -1;
+int __heap_struct_buffer_dhandle = -1;
+int __heap_buffer_dhandle1 = -1;
+int __data_struct_buffer_dhandle = -1;
+int __data_buffer_dhandle1 = -1;
+int __data_buffer_dhandle2 = -1;
+int __bss_struct_buffer_dhandle = -1;
+int __bss_buffer_dhandle = -1;
+int __format_string_buf_dhandle = -1;
+int __payload_buffer_handle = -1;
+int __homebrew_stack_handle = -1;
+int __iof_stack_handle = -1;
+int active_dhandle = -1;
+
 // get ret address
 // JM: ra written to stack one word higher than bp
 #define OLD_BP_PTR   __builtin_frame_address(0)
@@ -88,11 +116,23 @@ static ATTACK_FORM attack;
 int
 main(int argc, char ** argv)
 {
+    
     int option_char;
     jmp_buf stack_jmp_buffer_param;
 
     //register dasics
-    register_udasics(0);
+// #ifdef DASICS_CONFIG
+//     register_udasics(0);
+// #endif
+    // allocate one dasics handle for active zone
+#ifdef DASICS_CONFIG
+    extern char __ULIBTEXT_BEGIN__;
+    extern char __ULIBTEXT_END__;
+    int active_dhandle = dasics_libcfg_alloc(\
+        DASICS_LIBCFG_V | DASICS_LIBCFG_X, \
+        (uint64_t)&__ULIBTEXT_BEGIN__, (uint64_t)&__ULIBTEXT_END__ - 0x2);
+    assert(active_dhandle != -1);
+#endif
 
     // parse command line input
     while ((option_char = getopt(argc, argv, "t:i:c:l:f:d")) != -1) {
@@ -123,7 +163,7 @@ main(int argc, char ** argv)
                 break;
         }
     }
-
+    printf("Enter main\n");
     // Check if attack is possible
     if (is_attack_possible()) {
         perform_attack(&dummy_function, stack_jmp_buffer_param);
@@ -132,7 +172,11 @@ main(int argc, char ** argv)
     }
 
     printf("Back in main\n");
-    unregister_udasics();
+
+// #ifdef DASICS_CONFIG
+//     assert(dasics_libcfg_free(active_dhandle) != 0);
+//     // unregister_udasics();
+// #endif
 
     return 0;
 } /* main */
@@ -161,7 +205,21 @@ perform_attack(
     long * stack_mem_ptr_aux;
     int stack_flag;
 	char stack_secret[32];
+
+// #ifdef DASICS_CONFIG
+//     int __stack_secret_dhandle = \
+//         dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_W, \
+//             (uint64_t)stack_secret,
+//             (uint64_t)stack_secret + sizeof(stack_secret) \
+//             );
+// #endif
+
 	strcpy(stack_secret, data_secret);
+
+// #ifdef DASICS_CONFIG
+//     assert(dasics_libcfg_free(__stack_secret_dhandle) == 0);
+// #endif
+
     char stack_buffer[1024];
     struct attackme stack_struct;
     stack_struct.func_ptr = &dummy_function;
@@ -193,7 +251,6 @@ perform_attack(
 	char * heap_secret;
     int(**heap_func_ptr)(const char *) = 0;
     jmp_buf * heap_jmp_buffer;
-
     /* BSS TARGETS */
 	/*
 	Function pointer
@@ -233,11 +290,21 @@ perform_attack(
     // JM: assigning value to bss buffers
     //  to place them 'behind' other locals
     bss_buffer[0]  = 'a';
-  	strcpy(bss_secret, data_secret);
+
+// #ifdef DASICS_CONFIG
+//     int __bss_secret_dhandle = \
+//         dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_W,\
+//             (uint64_t)bss_buffer, (uint64_t)bss_buffer + sizeof(bss_buffer));
+// #endif
+    strcpy(bss_secret, data_secret);
+
+// #ifdef DASICS_CONFIG
+//     assert(dasics_libcfg_free(__bss_secret_dhandle) == 0);
+// #endif
 
     // write shellcode with correct jump address
     build_shellcode(shellcode_nonop);
-
+    
     switch (attack.location) {
         case STACK:
             // NN: Special case for stack_struct
@@ -245,13 +312,26 @@ perform_attack(
               attack.technique == DIRECT)
             {
                 buffer = stack_struct.buffer;
+            #ifdef DASICS_CONFIG
+                __stack_struct_buffer_dhandle = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)stack_struct.buffer,\
+                    (uint64_t)stack_struct.buffer + sizeof(stack_struct.buffer) - 1\
+                    );
+            #endif
             } else if (attack.code_ptr == FUNC_PTR_STACK_PARAM &&
               attack.technique == DIRECT)
             {
                 // JM: use buffer lower in memory for direct attack
-                set_low_buf(&buffer);
+                set_low_buf(&buffer, &__stack_low_buf_dhandle);
             } else {
                 buffer = stack_buffer;
+            #ifdef DASICS_CONFIG
+                __stack_buffer_dhandle = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)stack_buffer, \
+                    (uint64_t)stack_buffer + sizeof(stack_buffer) - 1);
+            #endif            
             }
 
             // JM: enable data-only attack
@@ -263,6 +343,13 @@ perform_attack(
             // longjmp buffer on the heap (the same since only choose one)
             heap_func_ptr   = (void *) heap_buffer1;
             heap_jmp_buffer = (void *) heap_buffer1;
+        #ifdef DASICS_CONFIG
+            __heap_buffer_dhandle1 = dasics_libcfg_alloc(\
+                DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                (uint64_t)heap_buffer1, \
+                (uint64_t)heap_buffer1 + 256 + sizeof(long) - 1 \
+                );
+        #endif
             break;
         case HEAP:
             /* Injection into heap buffer                            */
@@ -272,6 +359,13 @@ perform_attack(
               attack.technique == DIRECT)
             {
                 buffer = heap_struct->buffer;
+            #ifdef DASICS_CONFIG
+                __heap_struct_buffer_dhandle = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)heap_struct->buffer,\
+                    (uint64_t)heap_struct->buffer + sizeof(heap_struct->buffer) - 1 \
+                    );
+            #endif                
                 break;
             }
 
@@ -279,18 +373,35 @@ perform_attack(
               ((unsigned long) heap_buffer2 < (unsigned long) heap_buffer3))
             {
                 buffer = heap_buffer1;
+            #ifdef DASICS_CONFIG
+                __heap_buffer_dhandle1 = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)heap_buffer1, \
+                    (uint64_t)heap_buffer1 + 256 + sizeof(long) - 1
+                    );
+            #endif
+
                 // Set the location of the memory pointer on the heap
                 heap_mem_ptr_aux = (long *) heap_buffer2;
                 heap_mem_ptr     = (long *) heap_buffer3;
 
 				if (attack.code_ptr == VAR_LEAK) {
 					heap_secret = heap_buffer2;
-					strcpy(heap_secret, data_secret);
-				}
+                #ifdef DASICS_CONFIG
+                    int __heap_secret_dhandle = dasics_libcfg_alloc(\
+                        DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                        (uint64_t)heap_buffer2,
+                        (uint64_t)heap_buffer2 + 256 + sizeof(long) - 1\
+                        );
+                #endif
+                    strcpy(heap_secret, data_secret);
+                #ifdef DASICS_CONFIG
+                    assert(dasics_libcfg_free(__heap_secret_dhandle) == 0);
+				#endif
+                }
                 // Also set the location of the function pointer and the
                 // longjmp buffer on the heap (the same since only choose one)
                 heap_func_ptr = malloc(sizeof(void *));
-
                 // allocate the jump buffer
                 heap_jmp_buffer = (int *) malloc(sizeof(jmp_buf));
             } else {
@@ -313,6 +424,13 @@ perform_attack(
             // NN: Special case for stack_struct
             if (attack.code_ptr == STRUCT_FUNC_PTR_DATA) {
                 buffer = data_struct.buffer;
+            #ifdef DASICS_CONFIG
+                __data_struct_buffer_dhandle = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)data_struct.buffer, \
+                    (uint64_t)data_struct.buffer + sizeof(data_struct.buffer) - 1
+                    );
+            #endif
                 break;
             }
 
@@ -321,8 +439,22 @@ perform_attack(
               attack.technique == DIRECT)
             {
                 buffer = data_buffer2;
+            #ifdef DASICS_CONFIG
+                __data_buffer_dhandle2 = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)data_buffer2, \
+                    (uint64_t)data_buffer2 + sizeof(data_buffer2) - 1
+                    );
+            #endif    
             } else {
                 buffer = data_buffer1;
+            #ifdef DASICS_CONFIG
+                __data_buffer_dhandle1 = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)data_buffer1, \
+                    (uint64_t)data_buffer1 + sizeof(data_buffer1) - 1
+                    );
+            #endif
             }
 
             // JM: set up data ptr with DOP target
@@ -333,7 +465,15 @@ perform_attack(
             // Also set the location of the function pointer and the
             // longjmp buffer on the heap (the same since only choose one)
             heap_func_ptr   = (void *) heap_buffer1;
+
             heap_jmp_buffer = heap_buffer1;
+        #ifdef DASICS_CONFIG
+            __heap_buffer_dhandle1 = dasics_libcfg_alloc(\
+                DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                (uint64_t)heap_buffer1, \
+                (uint64_t)heap_buffer1 + 256 + sizeof(long) - 1\
+                );
+        #endif
             break;
         case BSS:
             /* Injection into BSS buffer                             */
@@ -341,11 +481,24 @@ perform_attack(
             // NN: Special case for bss_struct
             if (attack.code_ptr == STRUCT_FUNC_PTR_BSS) {
                 buffer = bss_struct.buffer;
+            #ifdef DASICS_CONFIG
+                __bss_struct_buffer_dhandle = dasics_libcfg_alloc(\
+                    DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                    (uint64_t)bss_struct.buffer, \
+                    (uint64_t)bss_struct.buffer + sizeof(bss_struct.buffer) - 1
+                    );
+            #endif    
                 break;
             }
 
             buffer = bss_buffer;
-
+        #ifdef DASICS_CONFIG
+            __bss_buffer_dhandle = dasics_libcfg_alloc(\
+                DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                (uint64_t)bss_buffer,
+                (uint64_t)bss_buffer + sizeof(bss_buffer)- 1
+                );
+        #endif
             bss_flag = 0;
 
             bss_mem_ptr_aux = &dummy_function;
@@ -358,12 +511,26 @@ perform_attack(
             // Also set the location of the function pointer and the
             // longjmp buffer on the heap (the same since only choose one)
             heap_func_ptr = (void *) heap_buffer1;
+        #ifdef DASICS_CONFIG
+            __heap_buffer_dhandle1 = dasics_libcfg_alloc(\
+                DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,\
+                (uint64_t)heap_buffer1, \
+                (uint64_t)heap_buffer1 + sizeof(heap_buffer1) - 1\
+                );
+        #endif
             break;
     }
-
     // make sure we actually have an initialized function pointer on the heap
+    // all init to dummy_function 
     if (heap_func_ptr)
         *heap_func_ptr = dummy_function;
+    heap_struct->func_ptr = dummy_function;
+    
+    bss_func_ptr = dummy_function;
+    bss_struct.func_ptr = dummy_function;
+
+    stack_struct.func_ptr = dummy_function;
+    stack_func_ptr = dummy_function;
 
     // Set Target Address
     switch (attack.technique) {
@@ -533,7 +700,7 @@ perform_attack(
                 case RETURN_ORIENTED_PROGRAMMING:
                     // skip over the prologue code of rop_target
                     // to simulate return-oriented programming gadget
-                    payload.overflow_ptr = (uintptr_t) &rop_target + 16;
+                    payload.overflow_ptr = (uintptr_t) &rop_target + 8;
                     break;
                 case INJECTED_CODE_NO_NOP:
                     payload.overflow_ptr = buffer;
@@ -617,6 +784,7 @@ perform_attack(
             break;
     }
 
+
     if (output_debug_info) {
         fprintf(stderr, "target_addr == %p\n", target_addr);
         fprintf(stderr, "buffer == %p\n", buffer);
@@ -649,10 +817,58 @@ perform_attack(
         exit(1);
     }
 
+    
+
+    if (output_debug_info)
+        printf("Begin overflow: buffer: 0x%lx\n", (uint64_t)buffer);
+
+
+
     /****************************************/
     /* Overflow buffer with chosen function */
     /* Note: Here memory will be corrupted  */
     /****************************************/
+#ifdef DASICS_CONFIG
+    __payload_buffer_handle = dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_R, \
+                                            (uint64_t)payload.buffer, (uint64_t)payload.buffer + payload.size - 1);
+    open_redirect();
+    switch (attack.function) {
+        case MEMCPY:
+            // memcpy() shouldn't copy the terminating NULL, therefore - 1
+            add_redirect_item("memcpy");
+            break;
+        case STRCPY:
+            add_redirect_item("strcpy");
+            break;
+        case STRNCPY:
+            add_redirect_item("strncpy");
+            break;
+        case SPRINTF:
+            add_redirect_item("sprintf");
+            break;
+        case SNPRINTF:
+            add_redirect_item("snprintf");
+            break;
+        case STRCAT:
+            add_redirect_item("strcat");
+            break;
+        case STRNCAT:
+            add_redirect_item("strncat");
+            break;
+        case SSCANF:
+            add_redirect_item("sscanf");
+            break;
+        case HOMEBREW:
+            break;
+        default:
+            if (output_debug_info)
+                fprintf(stderr, "Error: Unknown choice of function\n");
+            exit(1);
+            break;
+    }
+
+#endif    
+    // while (1);
 
     switch (attack.function) {
         case MEMCPY:
@@ -682,6 +898,12 @@ perform_attack(
             sscanf(payload.buffer, format_string_buf, buffer);
             break;
         case HOMEBREW:
+        #ifdef DASICS_CONFIG
+            // alloc a stack 
+            register uint64_t sp asm("sp");
+            __homebrew_stack_handle = dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W, \ 
+                    sp - 2 * 0x1000,  sp);
+        #endif
             homebrew_memcpy(buffer, payload.buffer, payload.size - 1);
             break;
         default:
@@ -690,6 +912,46 @@ perform_attack(
             exit(1);
             break;
     }
+
+#ifdef DASICS_CONFIG
+    assert(dasics_libcfg_free(__payload_buffer_handle) == 0);
+
+    close_redirect();
+    switch (attack.function) {
+        case MEMCPY:
+            // memcpy() shouldn't copy the terminating NULL, therefore - 1
+            delete_redirect_item("memcpy");
+            break;
+        case STRCPY:
+            delete_redirect_item("strcpy");
+            break;
+        case STRNCPY:
+            delete_redirect_item("strncpy");
+            break;
+        case SPRINTF:
+            delete_redirect_item("sprintf");
+            break;
+        case SNPRINTF:
+            delete_redirect_item("snprintf");
+            break;
+        case STRCAT:
+            delete_redirect_item("strcat");
+            break;
+        case STRNCAT:
+            delete_redirect_item("strncat");
+            break;
+        case SSCANF:
+            delete_redirect_item("sscanf");
+            break;
+        case HOMEBREW:
+            break;
+        default:
+            if (output_debug_info)
+                fprintf(stderr, "Error: Unknown choice of function\n");
+            exit(1);
+            break;
+    }
+#endif
 
     /*******************************************/
     /* Ensure that code pointer is overwritten */
@@ -712,28 +974,45 @@ perform_attack(
                 payload.size         = (uintptr_t) target_addr_aux
                   - (uintptr_t) buffer + sizeof(long) + 1;
                 build_payload(&payload);
+            #ifdef DASICS_CONFIG
+                add_redirect_item("memcpy");
+                assert(dasics_libcfg_free(__payload_buffer_handle) == 0);
+                __payload_buffer_handle = dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W, \
+                                                        (uint64_t)payload.buffer, (uint64_t)payload.buffer + payload.size - 1);
+                assert(__payload_buffer_handle != -1);
+                open_redirect();
+            #endif
                 memcpy(buffer, payload.buffer, payload.size - 1);
+            #ifdef DASICS_CONFIG
+                delete_redirect_item("memcpy");
+                close_redirect();
+            #endif
                 printf("target_addr_aux: %p\n", target_addr_aux);
 
                 switch (attack.location) {
                     case STACK:
-                        *(uint32_t *) (*(uint32_t *) target_addr) =
+                        *(uint64_t *) (*(uint64_t *) target_addr) =
                           (uintptr_t) stack_mem_ptr_aux;
                         break;
                     case HEAP:
-                        *(uint32_t *) (*(uint32_t *) target_addr) =
+                        *(uint64_t *) (*(uint64_t *) target_addr) =
                           (uintptr_t) *heap_mem_ptr_aux;
                         break;
                     case DATA:
-                        *(uint32_t *) (*(uint32_t *) target_addr) =
+                        *(uint64_t *) (*(uint64_t *) target_addr) =
                           (uintptr_t) *data_mem_ptr_aux;
                         break;
                     case BSS:
-                        *(uint32_t *) (*(uint32_t *) target_addr) =
+                        *(uint64_t *) (*(uint64_t *) target_addr) =
                           (uintptr_t) bss_mem_ptr_aux;
                         break;
                 }
             } else if (attack.inject_param == INJECTED_CODE_NO_NOP) {
+                if (output_debug_info)
+                {
+                    printf("[DEBUG]: *(uintptr_t *) target_addr: 0x%lx\n", target_addr);
+                    printf("[DEBUG]: *(uintptr_t *) target_addr: 0x%lx\n", *(uintptr_t *) target_addr);
+                }
                 *(uintptr_t *) (*(uintptr_t *) target_addr) =
                   (uintptr_t) buffer;
             }
@@ -816,6 +1095,60 @@ perform_attack(
 			data_leak(buffer);
 			break;
     }
+
+    // Release DASICS Handles, may be unreachable here ...
+
+#ifdef DASICS_CONFIG
+    if (__stack_struct_buffer_dhandle != -1) {
+        assert(dasics_libcfg_free(__stack_struct_buffer_dhandle) == 0);
+    }
+
+    if (__stack_low_buf_dhandle != -1) {
+        assert(dasics_libcfg_free(__stack_low_buf_dhandle) == 0);
+    }
+
+    if (__heap_struct_buffer_dhandle != -1) {
+        assert(dasics_libcfg_free(__heap_struct_buffer_dhandle) == 0);
+    }
+
+    if (__heap_buffer_dhandle1 != -1) {
+        assert(dasics_libcfg_free(__heap_buffer_dhandle1) == 0);
+    }
+
+    if (__data_struct_buffer_dhandle != -1) {
+        assert(dasics_libcfg_free(__data_struct_buffer_dhandle) == 0);
+    }
+
+    if (__data_buffer_dhandle1 != -1) {
+        assert(dasics_libcfg_free(__data_buffer_dhandle1) == 0);
+    }
+
+    if (__data_buffer_dhandle2 != -1) {
+        assert(dasics_libcfg_free(__data_buffer_dhandle2) == 0);
+    }
+
+    if (__bss_struct_buffer_dhandle != -1) {
+        assert(dasics_libcfg_free(__bss_struct_buffer_dhandle) == 0);
+    }
+
+    if (__bss_buffer_dhandle != -1) {
+        assert(dasics_libcfg_free(__bss_buffer_dhandle) == 0);
+    }
+
+    if (__format_string_buf_dhandle != -1) {
+        assert(dasics_libcfg_free(__format_string_buf_dhandle) == 0);
+    }
+
+    if (__payload_buffer_handle != -1) {
+        assert(dasics_libcfg_free(__payload_buffer_handle) == 0);
+    }    
+
+    if (__homebrew_stack_handle != -1) {
+        assert(dasics_libcfg_free(__homebrew_stack_handle) == 0);
+    }
+
+#endif
+
 } /* perform_attack */
 
 /*******************/
@@ -842,6 +1175,8 @@ build_payload(CHARPAYLOAD * payload)
 			
 			if (attack.code_ptr == VAR_LEAK) {
 				// JM: simulated packet with length included
+                // Bug: malloc payload.buffer here
+                payload->buffer = (char *) malloc(payload->size);
 				payload->size += 32 - sizeof(long);
 				payload->buffer[0] = payload->size & 0xFF;
 				payload->buffer[1] = payload->size / 0x100;
@@ -907,7 +1242,7 @@ lj_func(jmp_buf lj_buf)
     longjmp(lj_buf, 1111);
 }
 
-void
+void ATTR_ULIB_TEXT
 homebrew_memcpy(void * dst, const void * src, size_t length)
 {
     char * d, * s;
@@ -935,12 +1270,22 @@ ret2libc_target()
 }
 
 void
-dop_target(char * buf, uint32_t auth)
+dop_target(char * buf, uint64_t auth)
 {
     size_t auth_loc = auth;
 
     if (attack.code_ptr == VAR_IOF) {
+    #ifdef DASICS_CONFIG
+        register uint64_t sp asm("sp");
+        __iof_stack_handle = dasics_libcfg_alloc(DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W, \
+                    sp - 2 * 0x1000, sp);
+        assert(__iof_stack_handle != -1);
+    #endif    
         iof(buf, &auth_loc);
+
+    #ifdef DASICS_CONFIG
+        assert(dasics_libcfg_free(__iof_stack_handle) != -1);
+    #endif
     }
 
     if (!auth_loc) {
@@ -958,26 +1303,31 @@ rop_target()
     exit(0);
 }
 
-void
-set_low_buf(char ** buf)
+void 
+set_low_buf(char ** buf, int * buf_dhandle)
 {
     char low_buf[1024];
 
     if (output_debug_info)
         fprintf(stderr, "Inside set_low_buf()\n");
     *buf = &low_buf;
+#ifdef DASICS_CONFIG
+    *buf_dhandle = dasics_libcfg_alloc(\
+        DASICS_LIBCFG_V | DASICS_LIBCFG_R | DASICS_LIBCFG_W,
+        (uint64_t)low_buf, (uint64_t)low_buf + sizeof(low_buf) * sizeof(char));
+#endif
 }
 
-void
-iof(char * buf, uint32_t iv)
+void ATTR_ULIB_TEXT
+iof(char * buf, uint64_t iv)
 {
     char * map;
-    uint32_t key = iv;
+    uint64_t key = iv;
     uint8_t len  = strlen(buf);
 
     // 0-length allocation and vulenrable hash operations
     map      = (char *) malloc(len * sizeof(char));
-    key     -= (uint32_t) map;
+    key     -= (uint64_t) map;
     key     &= (uint16_t) len - 1;
     map[key] = 0xa1;
 }
@@ -987,7 +1337,23 @@ data_leak(char *buf) {
 	uint16_t size = buf[0] + (buf[1] * 0x100), i;
 	char *msg = (char *)malloc(size);
 
+#ifdef DASICS_CONFIG
+    int __msg_dhandle = dasics_libcfg_alloc(\
+        DASICS_LIBCFG_V | DASICS_LIBCFG_R,
+        (uint64_t)msg, (uint64_t)msg + size * sizeof(char) - 1);
+
+    add_redirect_item("memcpy");
+    open_redirect();
+#endif
+
 	memcpy(msg, buf + 2, size);
+
+#ifdef DASICS_CONFIG
+    assert(dasics_libcfg_free(__msg_dhandle) == 0);
+    delete_redirect_item("memcpy");
+    close_redirect();
+#endif
+
 	for (i = 0; i < size; i++) {
 		if (msg[i] >= 0x20) putc(msg[i],stdout);
 	}
@@ -1001,9 +1367,9 @@ data_leak(char *buf) {
 void
 build_shellcode(char * shellcode)
 {
-    char attack_addr[9], low_bits[4], high_bits[6];  // target address and its components
-    char lui_bin[33], addi_bin[33];                  // binary insn encodings (as strings)
-    char lui_s[9], addi_s[9], * jalr_s = "000300e7"; // hex insn encodings
+    char attack_addr[9] = {0}, low_bits[4] = {0}, high_bits[6] = {0};  // target address and its components
+    char lui_bin[33] = {0}, addi_bin[33] = {0};                  // binary insn encodings (as strings)
+    char lui_s[9] = {0}, addi_s[9] = {0}, * jalr_s = "000300e7"; // hex insn encodings
     size_t lui_val, addi_val, jalr_val;              // raw binary insn encodings
 	
 	// fix shellcode when lower bits become negative
