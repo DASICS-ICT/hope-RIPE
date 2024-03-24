@@ -1,4 +1,3 @@
-[submodule "dasics-dynamic-lib"]
-	path = dasics-dynamic-lib
-	url = git@github.com:DASICS-ICT/DASICS-dynamic-lib.git
-	branch = xs-dasics
+[submodule "LibDASICS"]
+	path = LibDASICS
+	url = git@github.com:DASICS-ICT/LibDASICS.git

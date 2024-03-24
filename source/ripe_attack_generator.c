@@ -15,7 +15,7 @@
 #include "ripe_attack_generator.h"
 #include <udasics.h>
 #include <uattr.h>
-#include <redirect.h>
+#include <udirect.h>
 
 
 extern void register_udasics(uint64_t funcptr);
@@ -121,15 +121,14 @@ main(int argc, char ** argv)
     jmp_buf stack_jmp_buffer_param;
 
     //register dasics
-// #ifdef DASICS_CONFIG
-//     register_udasics(0);
-// #endif
+#ifdef DASICS_CONFIG
+    register_udasics(0);
+#endif
     // allocate one dasics handle for active zone
 #ifdef DASICS_CONFIG
     extern char __ULIBTEXT_BEGIN__;
     extern char __ULIBTEXT_END__;
-    int active_dhandle = dasics_libcfg_alloc(\
-        DASICS_LIBCFG_V | DASICS_LIBCFG_X, \
+    int active_dhandle = dasics_jumpcfg_alloc(\
         (uint64_t)&__ULIBTEXT_BEGIN__, (uint64_t)&__ULIBTEXT_END__ - 0x2);
     assert(active_dhandle != -1);
 #endif
@@ -173,10 +172,11 @@ main(int argc, char ** argv)
 
     printf("Back in main\n");
 
-// #ifdef DASICS_CONFIG
-//     assert(dasics_libcfg_free(active_dhandle) != 0);
-//     // unregister_udasics();
-// #endif
+#ifdef DASICS_CONFIG
+
+    assert(dasics_jumpcfg_free(active_dhandle) != -1);
+    unregister_udasics();
+#endif
 
     return 0;
 } /* main */
@@ -397,6 +397,7 @@ perform_attack(
                     strcpy(heap_secret, data_secret);
                 #ifdef DASICS_CONFIG
                     assert(dasics_libcfg_free(__heap_secret_dhandle) == 0);
+                    __heap_secret_dhandle = -1;
 				#endif
                 }
                 // Also set the location of the function pointer and the
@@ -915,7 +916,7 @@ perform_attack(
 
 #ifdef DASICS_CONFIG
     assert(dasics_libcfg_free(__payload_buffer_handle) == 0);
-
+    __payload_buffer_handle = -1;
     close_redirect();
     switch (attack.function) {
         case MEMCPY:
@@ -1101,50 +1102,62 @@ perform_attack(
 #ifdef DASICS_CONFIG
     if (__stack_struct_buffer_dhandle != -1) {
         assert(dasics_libcfg_free(__stack_struct_buffer_dhandle) == 0);
+        __stack_struct_buffer_dhandle= -1;
     }
 
     if (__stack_low_buf_dhandle != -1) {
         assert(dasics_libcfg_free(__stack_low_buf_dhandle) == 0);
+        __stack_low_buf_dhandle = -1;
     }
 
     if (__heap_struct_buffer_dhandle != -1) {
         assert(dasics_libcfg_free(__heap_struct_buffer_dhandle) == 0);
+        __heap_struct_buffer_dhandle = -1;
     }
 
     if (__heap_buffer_dhandle1 != -1) {
         assert(dasics_libcfg_free(__heap_buffer_dhandle1) == 0);
+        __heap_buffer_dhandle1 = -1;
     }
 
     if (__data_struct_buffer_dhandle != -1) {
         assert(dasics_libcfg_free(__data_struct_buffer_dhandle) == 0);
+        __data_struct_buffer_dhandle = -1;
     }
 
     if (__data_buffer_dhandle1 != -1) {
         assert(dasics_libcfg_free(__data_buffer_dhandle1) == 0);
+        __data_buffer_dhandle1 = -1;
     }
 
     if (__data_buffer_dhandle2 != -1) {
         assert(dasics_libcfg_free(__data_buffer_dhandle2) == 0);
+        __data_buffer_dhandle2 = -1;
     }
 
     if (__bss_struct_buffer_dhandle != -1) {
         assert(dasics_libcfg_free(__bss_struct_buffer_dhandle) == 0);
+        __bss_struct_buffer_dhandle = -1;
     }
 
     if (__bss_buffer_dhandle != -1) {
         assert(dasics_libcfg_free(__bss_buffer_dhandle) == 0);
+        __bss_buffer_dhandle = -1;
     }
 
     if (__format_string_buf_dhandle != -1) {
         assert(dasics_libcfg_free(__format_string_buf_dhandle) == 0);
+        __format_string_buf_dhandle = -1;
     }
 
     if (__payload_buffer_handle != -1) {
         assert(dasics_libcfg_free(__payload_buffer_handle) == 0);
+        __payload_buffer_handle = -1;
     }    
 
     if (__homebrew_stack_handle != -1) {
         assert(dasics_libcfg_free(__homebrew_stack_handle) == 0);
+        __homebrew_stack_handle = -1;
     }
 
 #endif
@@ -1285,6 +1298,7 @@ dop_target(char * buf, uint64_t auth)
 
     #ifdef DASICS_CONFIG
         assert(dasics_libcfg_free(__iof_stack_handle) != -1);
+        __iof_stack_handle = -1;
     #endif
     }
 
@@ -1350,6 +1364,7 @@ data_leak(char *buf) {
 
 #ifdef DASICS_CONFIG
     assert(dasics_libcfg_free(__msg_dhandle) == 0);
+    __msg_dhandle = -1;
     delete_redirect_item("memcpy");
     close_redirect();
 #endif
